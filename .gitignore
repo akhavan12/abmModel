@@ -1,0 +1,65 @@
+# --- Python bytecode / cache ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+
+# --- Environments & tooling ---
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+.eggs/
+*.egg
+*.egg-info/
+.tox/
+.coverage
+.coverage.*
+.cache/
+.hypothesis/
+
+# --- Jupyter / plotting caches ---
+.ipynb_checkpoints/
+.matplotlib/
+
+# --- Build / dist ---
+build/
+dist/
+site/
+wheelhouse/
+
+# --- OS / editors ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Local config / secrets (uncomment if you add any) ---
+# .env
+# .envrc
+# .python-version
+
+# --- Project outputs (remove if you want to commit results) ---
+results.csv
+results_*.csv
+figure.png
+figures/
+charts/
+logs/
+*.log
+
+# --- Archives & large artifacts ---
+*.zip
+*.tar
+*.tar.gz
+
+# --- NetLogo / data dumps (optional) ---
+*.nlogo~
+data/
