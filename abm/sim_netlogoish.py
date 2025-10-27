@@ -34,11 +34,17 @@ def simulate_netlogoish(
     infectious_end = infectious_start + transfer_active_duration
     symptomatic_start_arr = np.full(N, symptomatic_start, dtype=np.int16)
     vaccinated = np.zeros(N, dtype=bool)
+    imm_timer = np.zeros(N, dtype=np.int16)    # tracks time in IMM
+    immunity_days = infected_period            # simple proxy; set to your NetLogo value
+
 
     # seed infections (don’t filter by vaccination)
     chosen = rng.choice(N, size=min(N, initial_infected_agents), replace=False)
     state[chosen] = NLState.INF
     virus_timer[chosen] = 0
+    ever_infected = np.zeros(N, dtype=bool)
+    ever_infected[chosen] = True
+
 
     # --- Network (static M1) ---
     # simple Erdos–Renyi with expected avg_degree
@@ -79,7 +85,34 @@ def simulate_netlogoish(
             & (virus_timer < infectious_end)
         )
         if inf_idx.size == 0:
-            break
+            # advance clocks even if nobody is *currently* infectious
+            virus_timer[state == NLState.INF] += 1
+
+            # recovery at end of infected period
+            rec = np.flatnonzero((state == NLState.INF) & (virus_timer >= infected_period))
+            if rec.size > 0:
+                state[rec] = NLState.IMM
+                virus_timer[rec] = 0
+                imm_timer[rec] = 0  # <- see Fix 2
+
+            # immunity waning
+            waned = np.flatnonzero((state == NLState.IMM) & (imm_timer >= immunity_days))  # <- see Fix 2
+            if waned.size > 0:
+                state[waned] = NLState.SUS
+                imm_timer[waned] = 0
+
+            # update immunity timer & productivity, then continue
+            imm_timer[state == NLState.IMM] += 1
+            current_prod = 100.0 - 10.0 * (np.count_nonzero(state == NLState.INF) / N)
+            min_productivity = min(min_productivity, float(current_prod))
+
+            # stop when epidemic dies out (no active infections)
+            if np.count_nonzero(state == NLState.INF) == 0:
+                break
+
+            day += 1
+            continue
+
 
         new_inf = []
         for i in inf_idx:
