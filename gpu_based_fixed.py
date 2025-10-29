@@ -3,11 +3,12 @@ gpu_based_fixed.py
 ------------------
 GPU-accelerated ABM scaffold (CuPy if available; NumPy fallback).
 
-Key behavior aligned with CPU version:
+Aligned behaviors:
 - precautions reduce transmission probability
 - stop when infected == 0
 - immune waning via daily hazard (half-life)
 - vaccination rolls out daily after v_start_time until target coverage
+- long-COVID incidence determined at recovery time
 
 Public API: simulate_netlogoish(**kwargs)
 """
@@ -34,6 +35,14 @@ def _rng(seed=None):
 
 def _to_xp(arr):
     return xp.asarray(arr) if not isinstance(arr, xp.ndarray) else arr
+
+
+def _as_int(x):
+    # robust conversion for CuPy/NumPy scalars
+    try:
+        return int(x.item())
+    except Exception:
+        return int(x)
 
 
 def create_network_csr(N: int, avg_degree: float, seed=None):
@@ -83,7 +92,15 @@ def simulate_netlogoish(
     # Immunity
     immune_wane_half_life_days=180, # half-life for losing post-infection immunity (days)
 
-    # Demographics (placeholders; used for extension such as LC modeling)
+    # Long COVID knobs
+    long_covid=True,
+    lc_onset_base_pct=15.0,         # base % at recovery that become LC
+    asymptomatic_pct=40.0,          # % of infections that are asymptomatic
+    asymptomatic_lc_mult=0.50,      # multiplier on LC risk if asymptomatic
+    lc_incidence_mult_female=1.20,  # multiplier for female agents
+    reinfection_new_onset_mult=0.70,# multiplier on LC risk for reinfections
+
+    # Demographics (placeholders; used for LC multipliers)
     age_distribution=True,
     age_range=95,
     gender=True,
@@ -112,6 +129,7 @@ def simulate_netlogoish(
     super_immune  = xp.zeros(N, dtype=bool)  # hook for future rules
     vaccinated    = xp.zeros(N, dtype=bool)
 
+    # infection course
     virus_timer          = xp.zeros(N, dtype=xp.int32)
     infection_start_tick = xp.zeros(N, dtype=xp.int32)
     symptomatic_start    = xp.zeros(N, dtype=xp.int32)
@@ -119,7 +137,14 @@ def simulate_netlogoish(
     num_infections       = xp.zeros(N, dtype=xp.int32)
     vacc_time            = xp.zeros(N, dtype=xp.int32)
 
-    # Demographics (CPU -> xp) — present for parity/extension
+    # flags for the current infection (per-agent)
+    current_asymptomatic = xp.zeros(N, dtype=bool)
+
+    # Long-COVID tracking (unique, persistent)
+    lc_flag       = xp.zeros(N, dtype=bool)
+    lc_start_day  = xp.zeros(N, dtype=xp.int32)
+
+    # Demographics (CPU -> xp)
     if age_distribution:
         age_bins = [(0,5,5.7),(5,15,12.5),(15,25,13.0),(25,35,13.7),
                     (35,45,13.1),(45,55,12.3),(55,65,12.9),(65,75,10.1),
@@ -134,6 +159,7 @@ def simulate_netlogoish(
         ages_cpu = np.random.default_rng(seed).integers(0, age_range, size=N, dtype=np.int32)
 
     if gender:
+        # genders: 0 = male, 1 = female
         genders_cpu = (np.random.default_rng(seed).random(N) >= male_population_pct/100.0).astype(np.int32)
     else:
         genders_cpu = np.zeros(N, np.int32)
@@ -151,11 +177,18 @@ def simulate_netlogoish(
     symptomatic_duration[init_idx] = active_duration
     num_infections[init_idx] = 1
 
+    # draw asymptomatic for these initial infections
+    if asymptomatic_pct > 0:
+        a_draw = xp.random.random(init_idx.size) * 100.0
+        current_asymptomatic[init_idx] = a_draw < asymptomatic_pct
+    else:
+        current_asymptomatic[init_idx] = False
+
     # Trackers
     min_productivity = 100.0
-    total_infected = int(init_idx_cpu.size)
+    total_infected_first = int(init_idx_cpu.size)  # unique first-time infections
     total_reinfected = 0
-    long_covid_cases = 0  # placeholder; wire in your CPU LC rules if needed
+    long_covid_cases = 0  # unique LC cases
 
     # Precompute target vaccination count
     target_covered = int(N * (vaccination_pct / 100.0)) if vaccination_pct > 0 else 0
@@ -166,18 +199,19 @@ def simulate_netlogoish(
     else:
         wane_p = 0.0
 
+    base_lc = lc_onset_base_pct / 100.0
+
     for day in range(1, max_days + 1):
 
         # --- Vaccination rollout (ongoing after v_start_time) ---
         if day >= v_start_time and target_covered > 0:
-            already = int(vaccinated.sum()) if hasattr(vaccinated, "sum") else int(vaccinated.sum())
+            already = _as_int(vaccinated.sum())
             need = target_covered - already
             if need > 0:
                 unvacc = xp.where(~vaccinated)[0]
                 remaining = int(unvacc.size)
                 if remaining > 0:
                     dose_today = max(1, int(min(need, remaining * daily_vax_pct_of_remaining)))
-                    # random sample (xp/numpy compatible)
                     if hasattr(xp.random, "permutation"):
                         perm = xp.random.permutation(remaining)
                     else:
@@ -224,16 +258,26 @@ def simulate_netlogoish(
             newly = atk_candidates[draws < eff_spread_pct]
 
             if newly.size > 0:
-                prev_inf = num_infections[newly] > 0
-                total_reinfected += int(prev_inf.sum())
-                total_infected += int(newly.size)
+                # first vs re-infections
+                prev_inf  = num_infections[newly] > 0
+                first_inf = newly[~prev_inf]
 
-                infected[newly] = True
-                infection_start_tick[newly] = day
-                virus_timer[newly] = 1
-                symptomatic_start[newly] = incubation_period
-                symptomatic_duration[newly] = active_duration
-                num_infections[newly] = num_infections[newly] + 1
+                total_reinfected += int(prev_inf.sum())
+                total_infected_first += int(first_inf.size)
+
+                infected[newly]              = True
+                infection_start_tick[newly]  = day
+                virus_timer[newly]           = 1
+                symptomatic_start[newly]     = incubation_period
+                symptomatic_duration[newly]  = active_duration
+                num_infections[newly]       += 1
+
+                # assign asymptomatic for the current infection
+                if asymptomatic_pct > 0:
+                    ad = xp.random.random(newly.size) * 100.0
+                    current_asymptomatic[newly] = ad < asymptomatic_pct
+                else:
+                    current_asymptomatic[newly] = False
 
         # --- Timers & transitions ---
         infected_idx = xp.where(infected)[0]
@@ -241,11 +285,47 @@ def simulate_netlogoish(
             virus_timer[infected_idx] += 1
             symptomatic[infected_idx] = (virus_timer[infected_idx] >= symptomatic_start[infected_idx]) & \
                                         (virus_timer[infected_idx] < symptomatic_start[infected_idx] + symptomatic_duration[infected_idx])
-            # Recover
+
+            # Recover today
             done = infected_idx[virus_timer[infected_idx] > infected_period]
             if done.size > 0:
                 infected[done] = False
                 immuned[done] = True
+
+                # ---- Long-COVID incidence at recovery ----
+                if long_covid and base_lc > 0:
+                    # Only agents who do not already have LC can get a new onset
+                    cand = done[~lc_flag[done]]
+                    if cand.size > 0:
+                        # Start from base probability
+                        p = xp.full(cand.size, base_lc)
+
+                        # Female multiplier (genders: 1=female)
+                        if gender:
+                            female = (genders[cand] == 1)
+                            p = xp.where(female, p * lc_incidence_mult_female, p)
+
+                        # Asymptomatic multiplier (usually reduces risk)
+                        p = xp.where(current_asymptomatic[cand], p * asymptomatic_lc_mult, p)
+
+                        # Reinfection multiplier (often reduces risk of NEW LC)
+                        reinf = (num_infections[cand] > 1)
+                        p = xp.where(reinf, p * reinfection_new_onset_mult, p)
+
+                        # Bound [0,1]
+                        p = xp.clip(p, 0.0, 1.0)
+
+                        # Draw new onsets
+                        rd = xp.random.random(cand.size)
+                        lc_new_mask = rd < p
+                        if lc_new_mask.any():
+                            lc_new = cand[lc_new_mask]
+                            lc_flag[lc_new] = True
+                            lc_start_day[lc_new] = day
+                            long_covid_cases += int(lc_new.size)
+
+                # clear current-infection flags for those recovered
+                current_asymptomatic[done] = False
 
         # --- Immunity waning (hazard) ---
         if wane_p > 0.0:
@@ -265,15 +345,15 @@ def simulate_netlogoish(
         symptomatic_rate = float(symptomatic.sum()) / float(N)
         min_productivity = min(min_productivity, max(0.0, 100.0 - 50.0 * symptomatic_rate))
 
-        # --- Stop when outbreak ends (matches CPU stop rule) ---
+        # --- Stop when outbreak ends ---
         if infected.sum() == 0:
             break
 
     return {
         "runtime_days": int(day),
-        "infected": int(total_infected),
+        "infected": int(total_infected_first),   # unique first-time infections
         "reinfected": int(total_reinfected),
-        "long_covid_cases": int(long_covid_cases),  # still placeholder
+        "long_covid_cases": int(long_covid_cases),
         "min_productivity": float(min_productivity),
         "backend": "cupy" if xp is not np else "numpy",
         "sparse_gpu": bool(SPARSE_GPU),
@@ -282,13 +362,6 @@ def simulate_netlogoish(
 
 if __name__ == "__main__":
     out = simulate_netlogoish(
-        N=5000, max_days=180, avg_degree=6,
-        initial_infected_agents=10, precaution_pct=30.0,
-        vaccination_pct=70.0, v_start_time=60, seed=42
-    )
-    print(out)
-
-    out = simulate_gpu(
         N=5000, max_days=180, avg_degree=6,
         initial_infected_agents=10, precaution_pct=30.0,
         vaccination_pct=70.0, v_start_time=60, seed=42

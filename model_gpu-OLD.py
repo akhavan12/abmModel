@@ -10,7 +10,7 @@ import time
 
 # Defaults for 100K agents
 DEFAULTS = dict(
-    N=100000,  # 100K agents!
+    N=1000_000,  # 100K agents!
     max_days=365,
     covid_spread_chance_pct=10.0,
     initial_infected_agents=50,  # Scale up initial infections
@@ -43,18 +43,28 @@ DEFAULTS = dict(
 )
 
 # Parameter ranges for exploration
+# RANGES = {
+#     "covid_spread_chance_pct": [2, 5, 10, 20],
+#     "initial_infected_agents": [10, 25, 50, 100],  # Scaled for 100K
+#     "precaution_pct": [0, 30, 50, 80],
+#     "avg_degree": [10, 30, 50, 70],
+#     "v_start_time": [0, 30, 180, 360],
+#     "vaccination_pct": [0, 30, 50, 80],
+# }
+
 RANGES = {
     "covid_spread_chance_pct": [2, 5, 10, 20],
-    "initial_infected_agents": [10, 25, 50, 100],  # Scaled for 100K
+    "initial_infected_agents": [2, 5, 10, 20],   # match CPU
     "precaution_pct": [0, 30, 50, 80],
     "avg_degree": [10, 30, 50, 70],
     "v_start_time": [0, 30, 180, 360],
     "vaccination_pct": [0, 30, 50, 80],
 }
 
+
 METRICS = ["runtime_days", "infected", "reinfected", "long_covid_cases", "min_productivity"]
 
-def run_sweep(n_runs=20, seed=0, out_csv="results_100k.csv", N=100000):
+def run_sweep(n_runs=50, seed=0, out_csv="results_1m.csv", N=100000):
     """
     Run parameter sweep with GPU acceleration
     
