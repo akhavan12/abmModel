@@ -1,7 +1,7 @@
 import itertools
 import numpy as np
 import pandas as pd
-from abm.sim_netlogoish import simulate_netlogoish as simulate
+from abm.sim_netlogoish_old import simulate_netlogoish as simulate
 
 # Defaults mapped to NetLogo-ish names
 DEFAULTS = dict(
