@@ -59,7 +59,7 @@ def make_grid(df, out_png="figure.png"):
     return out_png
 
 if __name__ == "__main__":
-    df = pd.read_csv("results.csv")
+    df = pd.read_csv("results_100k.csv")
     out = make_grid(df, out_png="figure.png")
     print("Saved", out)
 

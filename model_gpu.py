@@ -43,14 +43,24 @@ DEFAULTS = dict(
 )
 
 # Parameter ranges for exploration
+# RANGES = {
+#     "covid_spread_chance_pct": [2, 5, 10, 20],
+#     "initial_infected_agents": [10, 25, 50, 100],  # Scaled for 100K
+#     "precaution_pct": [0, 30, 50, 80],
+#     "avg_degree": [10, 30, 50, 70],
+#     "v_start_time": [0, 30, 180, 360],
+#     "vaccination_pct": [0, 30, 50, 80],
+# }
+
 RANGES = {
     "covid_spread_chance_pct": [2, 5, 10, 20],
-    "initial_infected_agents": [10, 25, 50, 100],  # Scaled for 100K
+    "initial_infected_agents": [2, 5, 10, 20],   # match CPU
     "precaution_pct": [0, 30, 50, 80],
     "avg_degree": [10, 30, 50, 70],
     "v_start_time": [0, 30, 180, 360],
     "vaccination_pct": [0, 30, 50, 80],
 }
+
 
 METRICS = ["runtime_days", "infected", "reinfected", "long_covid_cases", "min_productivity"]
 
