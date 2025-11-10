@@ -1,6 +1,6 @@
 
 import pandas as pd
-from abm.sim_netlogoish import simulate_netlogoish
+from sim_netlogoish import simulate_netlogoish
 
 def run_netlogoish_demo(out_csv="results_nlish.csv"):
     rows = []
